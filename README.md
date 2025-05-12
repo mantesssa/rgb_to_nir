@@ -22,7 +22,7 @@ graph LR
         id_input_rgb[Input RGB] --> id_encoder{Encoder}
         id_encoder --> id_bottleneck{Bottleneck}
         id_bottleneck --> id_decoder{Decoder}
-        id_encoder -.-> id_decoder % Skip Connections
+        id_encoder -.-> id_decoder
         id_decoder --> id_output_nir[Output NIR]
     end
 ```
