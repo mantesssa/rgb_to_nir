@@ -426,17 +426,41 @@ def train_gan(config):
         else:
             print(f"Optimizer states not found for epoch {load_epoch}. Optimizers will be reinitialized.")
     
+    # --- Dataset initialization ---
     train_dataset = RGBNIRPairedDataset(
-        root_dir=config['root_dir'], split='train',
+        root_dir=config['root_dir'],
+        split='train',
         preload_to_ram=config.get('preload_data', False),
         image_size=config.get('image_size', None)
     )
+
+    val_dataset = RGBNIRPairedDataset(
+        root_dir=config['root_dir'], 
+        split='val', 
+        preload_to_ram=False,
+        image_size=config.get('image_size', None)
+    )
+    
     num_workers = config.get('num_workers', 0)
     if os.name == 'nt' and num_workers > 0: print("Warning: num_workers > 0 on Windows can cause issues. Setting to 0."); num_workers = 0
     pin_memory_flag = config.get('pin_memory', True) if DEVICE == 'cuda' else False
+
+    # --- Dataloader initialization ---
     train_loader = DataLoader(
-        train_dataset, batch_size=config['batch_size'], shuffle=True,
-        num_workers=num_workers, pin_memory=pin_memory_flag, drop_last=True
+        train_dataset,
+        batch_size=config['batch_size'],
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=pin_memory_flag,
+        drop_last=True
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config['batch_size'],
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory_flag,
+        drop_last=True
     )
     print(f"Dataset size: {len(train_dataset)}, Image size: {config.get('image_size', 'original')}")
     print(f"Dataloader num_workers: {num_workers}, pin_memory: {pin_memory_flag}, drop_last: {train_loader.drop_last}")
@@ -450,26 +474,26 @@ def train_gan(config):
     lpips_val_metric = LearnedPerceptualImagePatchSimilarity(net_type='alex', normalize=True).to(DEVICE) 
     
     # Создание валидационного DataLoader
-    val_loader = None
-    try:
-        val_dataset = RGBNIRPairedDataset(
-            root_dir=config['root_dir'], 
-            split='val', 
-            preload_to_ram=False,
-            image_size=config.get('image_size', None)
-        )
-        if len(val_dataset) > 0:
-            val_loader = DataLoader(
-                val_dataset, 
-                batch_size=config['batch_size'], 
-                shuffle=False, 
-                num_workers=0 
-            )
-            print(f"Validation dataset loaded: {len(val_dataset)} samples.")
-        else:
-            print("Validation dataset is empty. Metrics (PSNR, SSIM, LPIPS) will not be calculated.")
-    except FileNotFoundError:
-        print(f"Validation data not found in {config['root_dir']} (expected val_A, val_B). Metrics will not be calculated.")
+    # val_loader = None
+    # try:
+    #     val_dataset = RGBNIRPairedDataset(
+    #         root_dir=config['root_dir'], 
+    #         split='val', 
+    #         preload_to_ram=False,
+    #         image_size=config.get('image_size', None)
+    #     )
+    #     if len(val_dataset) > 0:
+    #         val_loader = DataLoader(
+    #             val_dataset, 
+    #             batch_size=config['batch_size'], 
+    #             shuffle=False, 
+    #             num_workers=0 
+    #         )
+    #         print(f"Validation dataset loaded: {len(val_dataset)} samples.")
+    #     else:
+    #         print("Validation dataset is empty. Metrics (PSNR, SSIM, LPIPS) will not be calculated.")
+    # except FileNotFoundError:
+    #     print(f"Validation data not found in {config['root_dir']} (expected val_A, val_B). Metrics will not be calculated.")
 
     if start_epoch == 0: # Add graph only when starting fresh
         try:
@@ -620,23 +644,23 @@ def train_gan(config):
 
     # --- Логирование метрик для HParams ---
     # Собираем финальные метрики (потери за последнюю эпоху и метрики качества за последнюю эпоху)
-    final_metrics = {
-        'final_avg_loss_D': avg_loss_D if 'avg_loss_D' in locals() else float('NaN'),
-        'final_avg_loss_G_total': avg_loss_G if 'avg_loss_G' in locals() else float('NaN'), # Обновлено имя
-        'final_avg_loss_G_l1': avg_l1_loss if 'avg_l1_loss' in locals() else float('NaN'),    # Добавлен L1
-        'final_avg_wgan_D': avg_wgan_loss if 'avg_wgan_loss' in locals() else float('NaN'),
-        'completed_epochs': epoch + 1 if 'epoch' in locals() else 0,
-        'final_psnr': last_epoch_psnr, 
-        'final_ssim': last_epoch_ssim, 
-        'final_lpips': last_epoch_lpips 
-    }
+    # final_metrics = {
+    #     'final_avg_loss_D': avg_loss_D if 'avg_loss_D' in locals() else float('NaN'),
+    #     'final_avg_loss_G_total': avg_loss_G if 'avg_loss_G' in locals() else float('NaN'), # Обновлено имя
+    #     'final_avg_loss_G_l1': avg_l1_loss if 'avg_l1_loss' in locals() else float('NaN'),    # Добавлен L1
+    #     'final_avg_wgan_D': avg_wgan_loss if 'avg_wgan_loss' in locals() else float('NaN'),
+    #     'completed_epochs': epoch + 1 if 'epoch' in locals() else 0,
+    #     'final_psnr': last_epoch_psnr, 
+    #     'final_ssim': last_epoch_ssim, 
+    #     'final_lpips': last_epoch_lpips 
+    # }
 
-    try:
-        writer.add_hparams(hparam_dict_to_log, final_metrics)
-    except Exception as e:
-        print(f"Could not write HParams: {e}")
-        print("HParam dict:", hparam_dict_to_log)
-        print("Metric dict:", final_metrics)
+    # try:
+    #     writer.add_hparams(hparam_dict_to_log, final_metrics)
+    # except Exception as e:
+    #     print(f"Could not write HParams: {e}")
+    #     print("HParam dict:", hparam_dict_to_log)
+    #     print("Metric dict:", final_metrics)
 
     writer.close()
 
@@ -661,8 +685,8 @@ if __name__ == "__main__":
         'd_base_channels': 32, 'd_num_levels': 4,
         
         'apply_weights_init': True,
-        'log_dir': 'runs/rgb_to_nir_wgan_gp_v2_2', # New log_dir for 128px
-        'checkpoint_dir': 'models/rgb_to_nir_wgan_gp_v2_2', # New checkpoint_dir for 128px
+        'log_dir': 'runs/rgb_to_nir_wgan_gp_v2_3', # New log_dir for 128px
+        'checkpoint_dir': 'models/rgb_to_nir_wgan_gp_v2_3', # New checkpoint_dir for 128px
         'log_freq_batch': 100, 
         'log_image_freq_step': 500, 
         'log_weights_freq_step': 500, # New parameter to control frequency of weight/gradient logging
