@@ -59,7 +59,7 @@ class RGBNIRPairedDataset(Dataset):
             rgb_image_pil = Image.open(rgb_path).convert('RGB')
             # Convert to HSV for generator input
             # hsv_image_pil = rgb_image_pil.convert('HSV')
-            hsv_image_pil = rgb_image_pil
+            # hsv_image_pil = rgb_image_pil
 
             # Load NIR image
             nir_image_pil = Image.open(nir_path).convert('L')
@@ -67,17 +67,17 @@ class RGBNIRPairedDataset(Dataset):
             # Apply resizing if specified
             if self.resize_transform:
                 rgb_image_pil_resized = self.resize_transform(rgb_image_pil)
-                hsv_image_pil_resized = self.resize_transform(hsv_image_pil)
+                # hsv_image_pil_resized = self.resize_transform(hsv_image_pil)
                 nir_image_pil_resized = self.resize_transform(nir_image_pil)
             else:
                 rgb_image_pil_resized = rgb_image_pil
-                hsv_image_pil_resized = hsv_image_pil
+                # hsv_image_pil_resized = hsv_image_pil
                 nir_image_pil_resized = nir_image_pil
 
             # Process HSV for generator input (normalized to [-1, 1])
             # PIL HSV channels are all in [0, 255]
-            hsv_array = np.array(hsv_image_pil_resized, dtype=np.float32)
-            hsv_tensor = torch.from_numpy(hsv_array).permute(2, 0, 1) / 127.5 - 1.0
+            # hsv_array = np.array(hsv_image_pil_resized, dtype=np.float32)
+            # hsv_tensor = torch.from_numpy(hsv_array).permute(2, 0, 1) / 127.5 - 1.0
 
             # Process original RGB for logging (normalized to [-1, 1])
             rgb_array_log = np.array(rgb_image_pil_resized, dtype=np.float32)
@@ -87,7 +87,9 @@ class RGBNIRPairedDataset(Dataset):
             nir_array = np.array(nir_image_pil_resized, dtype=np.float32)
             nir_tensor = torch.from_numpy(nir_array).unsqueeze(0) / 127.5 - 1.0
             
-            return hsv_tensor, rgb_tensor_log, nir_tensor
+            # return hsv_tensor, rgb_tensor_log, nir_tensor
+            return rgb_tensor_log, rgb_tensor_log, nir_tensor
+
 
         except FileNotFoundError as e:
             print(f"Error: File not found for index {idx}, RGB: {rgb_path} or NIR: {nir_path}")
@@ -233,9 +235,11 @@ def critic_loss_fn(critic_real_out, critic_fake_out, gradient_penalty, lambda_gp
     loss_critic = wgan_loss + lambda_gp * gradient_penalty
     return loss_critic, wgan_loss
 
-def generator_loss_fn(critic_fake_out):
-    loss_gen = -torch.mean(critic_fake_out)
-    return loss_gen
+def generator_loss_fn(critic_fake_out, fake_nir, real_nir, lambda_l1):
+    loss_G_gan = -torch.mean(critic_fake_out)
+    loss_G_l1 = F.l1_loss(fake_nir, real_nir)
+    total_loss_G = loss_G_gan + lambda_l1 * loss_G_l1
+    return total_loss_G, loss_G_gan, loss_G_l1
 
 # --- Вспомогательная функция для оценки на валидационном наборе ---
 def evaluate_on_validation_set(generator_model, val_loader, device, psnr_metric_obj, ssim_metric_obj, lpips_metric_obj):
@@ -493,7 +497,7 @@ def train_gan(config):
 
     for epoch in range(start_epoch, config['num_epochs']):
         progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config['num_epochs']}", leave=True)
-        epoch_loss_D_avg, epoch_loss_G_avg, epoch_wgan_loss_avg = 0.0, 0.0, 0.0
+        epoch_loss_D_avg, epoch_loss_G_avg, epoch_wgan_loss_avg, epoch_l1_loss_avg = 0.0, 0.0, 0.0, 0.0
 
         # Unpack three items: hsv_tensor, rgb_tensor_for_log, nir_tensor
         for batch_idx, (real_hsv, real_rgb_for_log, real_nir) in enumerate(progress_bar):
@@ -517,17 +521,31 @@ def train_gan(config):
             optimizer_G.zero_grad()
             fake_nir_for_gen = generator(real_hsv)
             critic_fake_out_for_gen = critic(real_hsv, fake_nir_for_gen) # Critic conditions on real_hsv
-            loss_G = generator_loss_fn(critic_fake_out_for_gen)
+            
+            lambda_l1_val = config.get('lambda_l1', 100) # Получаем из конфига, по умолчанию 100
+            loss_G, loss_G_gan, loss_G_l1 = generator_loss_fn(
+                critic_fake_out_for_gen, 
+                fake_nir_for_gen, 
+                real_nir, # Передаем real_nir для L1 loss
+                lambda_l1_val
+            )
+
             loss_G.backward(); optimizer_G.step()
 
             writer.add_scalar('Loss/Critic_step', loss_D.item(), global_step)
             writer.add_scalar('Loss/WGAN_D_step', wgan_loss.item(), global_step)
             writer.add_scalar('Loss/Gradient_Penalty_step', gradient_penalty.item(), global_step)
-            writer.add_scalar('Loss/Generator_step', loss_G.item(), global_step)
-            epoch_loss_D_avg += loss_D.item(); epoch_loss_G_avg += loss_G.item(); epoch_wgan_loss_avg += wgan_loss.item()
+            writer.add_scalar('Loss/Generator_GAN_step', loss_G_gan.item(), global_step) # Логируем GAN часть G loss
+            writer.add_scalar('Loss/Generator_L1_step', loss_G_l1.item(), global_step)   # Логируем L1 часть G loss
+            writer.add_scalar('Loss/Generator_Total_step', loss_G.item(), global_step) # Логируем общую G loss
+            
+            epoch_loss_D_avg += loss_D.item(); 
+            epoch_loss_G_avg += loss_G.item(); # Общий G loss
+            epoch_wgan_loss_avg += wgan_loss.item()
+            epoch_l1_loss_avg += loss_G_l1.item() # L1 loss
 
             if batch_idx % config.get('log_freq_batch', 50) == 0:
-                progress_bar.set_postfix({'Loss D': f'{loss_D.item():.4f}', 'Loss G': f'{loss_G.item():.4f}', 'GP': f'{gradient_penalty.item():.4f}'})
+                progress_bar.set_postfix({'Loss D': f'{loss_D.item():.4f}', 'Loss G': f'{loss_G.item():.4f}', 'GP': f'{gradient_penalty.item():.4f}', 'L1': f'{loss_G_l1.item():.4f}'})
             
             # Log weights and gradients distributions
             if global_step % config.get('log_weights_freq_step', config.get('log_image_freq_step', 200)) == 0:
@@ -557,10 +575,14 @@ def train_gan(config):
         avg_loss_D = epoch_loss_D_avg / len(train_loader)
         avg_loss_G = epoch_loss_G_avg / len(train_loader)
         avg_wgan_loss = epoch_wgan_loss_avg / len(train_loader)
+        avg_l1_loss = epoch_l1_loss_avg / len(train_loader) # Средний L1 loss за эпоху
+
         writer.add_scalar('Loss_epoch/Critic', avg_loss_D, epoch + 1)
         writer.add_scalar('Loss_epoch/WGAN_D', avg_wgan_loss, epoch + 1)
-        writer.add_scalar('Loss_epoch/Generator', avg_loss_G, epoch + 1)
-        print(f"End of Epoch {epoch+1}/{config['num_epochs']} -> Avg Loss D: {avg_loss_D:.4f}, Avg WGAN D: {avg_wgan_loss:.4f}, Avg Loss G: {avg_loss_G:.4f}")
+        writer.add_scalar('Loss_epoch/Generator_Total', avg_loss_G, epoch + 1)
+        writer.add_scalar('Loss_epoch/Generator_L1', avg_l1_loss, epoch + 1) # Логируем средний L1 за эпоху
+
+        print(f"End of Epoch {epoch+1}/{config['num_epochs']} -> Avg Loss D: {avg_loss_D:.4f}, Avg WGAN D: {avg_wgan_loss:.4f}, Avg Loss G (Total): {avg_loss_G:.4f}, Avg L1 G: {avg_l1_loss:.4f}")
 
         # --- Оценка на валидационном наборе и логирование метрик после каждой эпохи ---
         if val_loader is not None:
@@ -600,7 +622,8 @@ def train_gan(config):
     # Собираем финальные метрики (потери за последнюю эпоху и метрики качества за последнюю эпоху)
     final_metrics = {
         'final_avg_loss_D': avg_loss_D if 'avg_loss_D' in locals() else float('NaN'),
-        'final_avg_loss_G': avg_loss_G if 'avg_loss_G' in locals() else float('NaN'),
+        'final_avg_loss_G_total': avg_loss_G if 'avg_loss_G' in locals() else float('NaN'), # Обновлено имя
+        'final_avg_loss_G_l1': avg_l1_loss if 'avg_l1_loss' in locals() else float('NaN'),    # Добавлен L1
         'final_avg_wgan_D': avg_wgan_loss if 'avg_wgan_loss' in locals() else float('NaN'),
         'completed_epochs': epoch + 1 if 'epoch' in locals() else 0,
         'final_psnr': last_epoch_psnr, 
@@ -618,17 +641,19 @@ def train_gan(config):
     writer.close()
 
 if __name__ == "__main__":
+    torch.manual_seed(42)
     config = {
         'learning_rate': 0.0002,
         'beta1': 0.5,
         'beta2': 0.999,
-        'batch_size': 192,
+        'batch_size': 128,
         'num_epochs': 20, 
         'lambda_gp': 6, 
+        'lambda_l1': 100, # <-- Установлено значение 100 для lambda_l1
         'n_critic': 4,
         'root_dir': "/workspace-SR004.nfs2/nabiev/yolo_mamba_prjct/alakey/RGB_to_NIR/data/sen12ms_All_seasons", # !!! ИЗМЕНИТЕ НА ВАШ ПУТЬ !!!
         'device_preference': 'cuda',
-        'image_size': 64,
+        'image_size': 128, # Changed to 128
         'preload_data': False,
         'num_workers': 4,
         'pin_memory': False, # pin_memory=False for MPS generally
@@ -636,8 +661,8 @@ if __name__ == "__main__":
         'd_base_channels': 32, 'd_num_levels': 4,
         
         'apply_weights_init': True,
-        'log_dir': 'runs/rgb_to_nir_wgan_gp_v10', # Новый log_dir для эксперимента
-        'checkpoint_dir': 'models/rgb_to_nir_wgan_gp_v10', # Новый checkpoint_dir
+        'log_dir': 'runs/rgb_to_nir_wgan_gp_v2_2', # New log_dir for 128px
+        'checkpoint_dir': 'models/rgb_to_nir_wgan_gp_v2_2', # New checkpoint_dir for 128px
         'log_freq_batch': 100, 
         'log_image_freq_step': 500, 
         'log_weights_freq_step': 500, # New parameter to control frequency of weight/gradient logging
@@ -645,6 +670,8 @@ if __name__ == "__main__":
         'load_checkpoint': False, # Set to True to load a checkpoint
         'checkpoint_load_epoch': 0, # Specify epoch to load if load_checkpoint is True
     } # CUDA_VISIBLE_DEVICES=0 python main_small_svg_p.py  
+    print(config.get('log_dir'))
+    print(config.get('checkpoint_dir'))
 
     os.makedirs(config['log_dir'], exist_ok=True)
     os.makedirs(config['checkpoint_dir'], exist_ok=True)
