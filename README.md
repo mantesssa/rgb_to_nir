@@ -16,7 +16,7 @@ Satellite and aerial images often contain information across various spectral ba
 
 The deepNIR subset of SEN12MS dataset was used for training the model. This dataset contains multispectral images from Sentinel-1 (SAR) and Sentinel-2 (optical, including RGB and NIR channels), along with other auxiliary data.
 
-*   **DeepNIR ():** [SEN12MS - A Multi-Sensor Land Cover Classification Dataset]([https://www.kaggle.com/datasets/nikitarom/sen12ms-a-multi-sensor-land-cover-classification](https://www.kaggle.com/datasets/enddl22/deepnir-nir-rgb-capsicum)).
+*   **DeepNIR ():** [SEN12MS - A Multi-Sensor Land Cover Classification Dataset][https://www.kaggle.com/datasets/enddl22/deepnir-nir-rgb-capsicum].
 *   **Dataset Link (Original Publication):** [SEN12MS: A Curated Dataset of Paired SAR and Multi-Spectral Satellite Imagery for Deep Learning and Data Fusion](https://mediatum.ub.tum.de/1474000)
 
 This project uses pairs of RGB (from Sentinel-2) and NIR (also from Sentinel-2) images. The data is organized into folders like `train_A` (RGB), `train_B` (NIR), `val_A`, `val_B`, etc.
